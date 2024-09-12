@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Req } from '@nestjs/common';
+import { Controller, Get, Post } from '@nestjs/common';
 import { GmailService } from './gmail.service';
 import { AuthService } from 'src/auth/auth.service';
 
@@ -13,8 +13,8 @@ export class GmailController {
   async getEmails() {
     try {
       // Obtener el access token utilizando el AuthService
-      const accessToken = await this.authService.getAccessToken();
-      
+      const accessToken = await this.authService.getAccessToken();      
+
       // Obtener los correos recientes usando el GmailService
       const recentEmails = await this.gmailService.getRecentEmails(accessToken);
       

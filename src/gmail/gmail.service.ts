@@ -1,16 +1,19 @@
-import { EmailRepository } from '../email/email.repository';
+import { Email } from 'src/email/email.entity';
+import { google } from 'googleapis';
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { OAuth2Service } from 'src/common/services/oauth2.service';
+import { PDFService } from './pdf.service';
+import { PubSubService } from 'src/pubsub/pubsub.service';
+import { Repository } from 'typeorm';
 import * as nodemailer from 'nodemailer';
 import * as path from 'path';
 import * as pdfParse from 'pdf-parse';
-import { Email } from 'src/email/email.entity';
-import { Repository } from 'typeorm';
 import * as XLSX from 'xlsx';
 
 @Injectable()
-export class GmailService {
+export class GmailService implements OnModuleInit {
 
   private referenceData: any[];
   private readonly logger = new Logger(GmailService.name);
@@ -21,17 +24,49 @@ export class GmailService {
       pass: 'descorazonaria3312',
     },
   });
+  private oauth2Client;
 
   constructor(
     @InjectRepository(Email)
-    private readonly emailRepository: Repository<Email>,  // Asegúrate de que esto esté correctamente inyectado
+    private readonly emailRepository: Repository<Email>, 
     private readonly httpService: HttpService,
+    private readonly oauth2Service: OAuth2Service,
+    private readonly pdfService: PDFService,
+    private readonly pubSubService: PubSubService,
+
   ) {
+    this.oauth2Client = this.oauth2Service.getClient();
     this.loadReferenceData();
+    this.pubSubService.listenForMessages();
+  }
+
+  async onModuleInit() {
+    // Configura Gmail para que observe la bandeja de entrada y envíe notificaciones a Pub/Sub
+    await this.watchEmails();
+  }
+
+  // Método para obtener los correos electrónicos más recientes
+  async getRecentEmails(accessToken: string) {
+    try {
+      const response = await this.httpService.get('https://www.googleapis.com/gmail/v1/users/me/messages', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        params: {
+          maxResults: 1, // Es posible ajustar el número de correos a obtener
+        },
+      }).toPromise();
+
+      return response.data;
+    } catch (error) {
+      this.logger.error('Failed to retrieve recent emails', error.stack);
+      throw new Error('Could not retrieve emails');
+    }
   }
 
   // Procesamiento de correos electrónicos (integrado en la lógica existente)
-  async processEmails(emails: any[], accessToken: string) {    
+  async processEmails(emails: any[], accessToken: string) {
+
     for (const email of emails) {
       const messageDetails = await this.getMessageDetails(accessToken, email.id);
 
@@ -40,16 +75,17 @@ export class GmailService {
           if (part.filename && (part.filename.endsWith('.pdf') || part.filename.endsWith('.xlsx'))) {
             const attachment = await this.downloadAttachment(accessToken, email.id, part.body.attachmentId);
             const fileBuffer = Buffer.from(attachment.data, 'base64');
-
+                        
             let isMatch = false;
-
+            
             if (part.filename.endsWith('.xlsx')) {
               const data = this.processExcel(fileBuffer);
               isMatch = this.compareWithReference(data);
             }
-
+            
             if (part.filename.endsWith('.pdf')) {
               const text = await this.processPDF(fileBuffer);
+              await this.pdfService.processPDFWithOpenAI(fileBuffer, text);
               isMatch = this.comparePDFTextWithReference(text);
             }
 
@@ -82,25 +118,6 @@ export class GmailService {
     const email = this.emailRepository.create({ sender, subject, content, attachmentType, isMatch });
         
     await this.emailRepository.save(email);
-  }
-
-  // Método para obtener los correos electrónicos más recientes
-  async getRecentEmails(accessToken: string) {
-    try {
-      const response = await this.httpService.get('https://www.googleapis.com/gmail/v1/users/me/messages', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        params: {
-          maxResults: 10, // Es posible ajustar el número de correos a obtener
-        },
-      }).toPromise();
-
-      return response.data;
-    } catch (error) {
-      this.logger.error('Failed to retrieve recent emails', error.stack);
-      throw new Error('Could not retrieve emails');
-    }
   }
 
   // Método para obtener los detalles de un mensaje específico
@@ -204,5 +221,23 @@ export class GmailService {
 
     await this.transporter.sendMail(mailOptions);
   }
-  
+
+  // Método para observar emails entrantes
+  async watchEmails() {
+    const gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
+    // console.log('Using service account:', this.oauth2Client.credentials);
+
+    try {
+      const res = await gmail.users.watch({
+        userId: 'me',
+        requestBody: {
+          topicName: process.env.GOOGLE_TOPIC_NAME,
+          labelIds: ['INBOX'],
+        },
+      });
+      console.log('Watch response:', res.data);
+    } catch (error) {
+      // console.error('Error watching emails2:', error);
+    }
+  }
 }
