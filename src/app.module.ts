@@ -1,12 +1,15 @@
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { CommonModule } from './common/common.module';
 import { ConfigModule } from '@nestjs/config';
-import { GmailModule } from './gmail/gmail.module';
-import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { Email } from './email/email.entity';
 import { EmailModule } from './email/email.module';
+import { GmailModule } from './gmail/gmail.module';
+import { Module } from '@nestjs/common';
+import { PubSubModule } from './pubsub/pubsub.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { CatalogoModule } from './catalogo/catalogo.module';
 
 @Module({
   imports: [
@@ -27,9 +30,12 @@ import { EmailModule } from './email/email.module';
       },
       entities: [__dirname + '/../**/*.entity.js', Email],
     }),
-    EmailModule,
     AuthModule,
+    CommonModule,
+    EmailModule,
     GmailModule,
+    PubSubModule,
+    CatalogoModule
   ],
   controllers: [AppController],
   providers: [AppService],
